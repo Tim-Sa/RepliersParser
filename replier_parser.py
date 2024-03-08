@@ -1,6 +1,31 @@
+import json
+import asyncio
+import platform
+from functools import wraps
 from json import JSONDecodeError
+from asyncio.proactor_events import _ProactorBasePipeTransport
 
 import aiohttp
+
+
+def silence_event_loop_closed(func):
+    '''
+        Wrapper for disable raising of 'Event loop is closed' error.
+    '''
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except RuntimeError as e:
+            if str(e) != 'Event loop is closed':
+                raise
+    return wrapper
+
+
+ # disable raising of 'Event loop is closed' errors with all async functions
+_ProactorBasePipeTransport.__del__ = silence_event_loop_closed(_ProactorBasePipeTransport.__del__)
+if platform.system()=='Windows':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 async def replier_request(session: aiohttp.ClientSession, 
@@ -34,12 +59,12 @@ async def replier_request(session: aiohttp.ClientSession,
     # request to repliers API with specified params
     async with session.get(url, headers=headers) as response:
         try:
-            json = await response.json()
+            json_result = await response.json()
         except JSONDecodeError:
             # TODO: signal about problem
-            json = {}
+            json_result = {}
 
         status = response.status
     
-    return json, status
+    return json_result, status
 
