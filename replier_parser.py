@@ -1,3 +1,5 @@
+#!/venv/bin/python
+
 import re
 import json
 import asyncio
@@ -86,7 +88,7 @@ def filter_buildings(data: dict,
                 'listings': 
                         [item1(dict), item2(dict), ..., itemN(dict)]
             }
-        f_street_number: str - street number to for filtering
+        f_street_number: str - street number for filtering
         f_street_name: str - street name for filtering
         f_street_abbr: str - street abbreviature for filtering
         f_apt_unit: str - unit code for filtering
@@ -126,3 +128,16 @@ def filter_buildings(data: dict,
             filtered.append(build)
 
     return filtered
+
+
+def read_filter_settings(path: str) -> list[dict]:
+    '''
+    read json file with filter params
+    '''
+    
+    with open(path, "r", encoding='utf-8') as f:
+        settings = json.load(f)
+ 
+    return settings
+
+
