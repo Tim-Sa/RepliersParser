@@ -1,3 +1,4 @@
+import re
 import json
 import asyncio
 import platform
@@ -68,3 +69,60 @@ async def replier_request(session: aiohttp.ClientSession,
     
     return json_result, status
 
+
+def filter_buildings(data: dict, 
+                     f_city: str, 
+                     f_street_number: str, 
+                     f_street_name: str, 
+                     f_street_abbr: str, 
+                     f_apt_unit: str) -> list[dict]:
+    
+    '''
+    filter of items by street abbreviature and unit code.
+
+    params:
+        data: dict - data about buildings from API response with this structure - 
+            {
+                'listings': 
+                        [item1(dict), item2(dict), ..., itemN(dict)]
+            }
+        f_street_number: str - street number to for filtering
+        f_street_name: str - street name for filtering
+        f_street_abbr: str - street abbreviature for filtering
+        f_apt_unit: str - unit code for filtering
+
+    returns
+        list of dictionaries (hash map) - info about finded and filtered buildings
+    '''
+
+    # unit code for filtering must be in same format with unit code from API response
+    #  Ph1004, PH 1004, ph-1004, ph#1004, #ph1004 -> ph1004
+    if len(f_apt_unit) > 0:
+        f_apt_unit = re.findall(r'[a-zA-Z0-9]+', f_apt_unit)[0].lower()
+
+    filtered = []
+
+    # parse info about every item from API response
+    for build in data['listings']:
+        addr = build["address"]
+        city = addr["city"]
+        street_number = addr['streetNumber']
+        street_name = addr['streetName']
+        street_abbr = addr["streetSuffix"]
+        apt_unit = addr["unitNumber"]
+
+        # unit code from API must be in same format with unit code for filtering
+        #  Ph1004, PH 1004, ph-1004, ph#1004, #ph1004 -> ph1004
+        if len(apt_unit) > 0:
+            apt_unit = re.findall(r'[a-zA-Z0-9]+', apt_unit)[0].lower()
+
+        # compare data from API with filter fields
+        if (f_city == city and
+            f_street_number == street_number and 
+            f_street_name == street_name and 
+            f_street_abbr == street_abbr and 
+            f_apt_unit == apt_unit):
+
+            filtered.append(build)
+
+    return filtered
