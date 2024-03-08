@@ -1,0 +1,2 @@
+renv: 
+	. ./venv/bin/activate
