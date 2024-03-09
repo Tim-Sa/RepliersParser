@@ -1,0 +1,11 @@
+version: '2.23'
+
+
+services:
+
+  cache:
+    image: redis
+    container_name: redis
+    restart: always
+    ports:
+      - 127.0.0.1:6379:6379
