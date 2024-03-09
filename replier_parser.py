@@ -1,6 +1,7 @@
 #!/venv/bin/python
-
+import os
 import re
+import time
 import json
 import asyncio
 import platform
@@ -9,6 +10,8 @@ from json import JSONDecodeError
 from asyncio.proactor_events import _ProactorBasePipeTransport
 
 import aiohttp
+import redis.asyncio as aioredis
+from dotenv import load_dotenv
 
 
 def silence_event_loop_closed(func):
@@ -29,6 +32,13 @@ def silence_event_loop_closed(func):
 _ProactorBasePipeTransport.__del__ = silence_event_loop_closed(_ProactorBasePipeTransport.__del__)
 if platform.system()=='Windows':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+# Cache for storing requests results for preventing reply of similar requests
+CACHE_REDIS_HOST = 'redis://localhost'
+redis = aioredis.from_url(CACHE_REDIS_HOST, 
+                          encoding="utf8", 
+                          decode_responses=True)
 
 
 async def replier_request(session: aiohttp.ClientSession, 
@@ -141,3 +151,114 @@ def read_filter_settings(path: str) -> list[dict]:
     return settings
 
 
+async def get_buildings_info(session: aiohttp.ClientSession, 
+                             city: str, 
+                             street_name: str, 
+                             street_number: str, 
+                             street_abbr: str, 
+                             apt_unit: str) -> dict:
+    
+    '''
+    get info about buildings from specified street and city, 
+    filter buildings with specified street abbreviature and unit code
+
+    params:
+        session: iohttp.ClientSession - aiohttp session for async requests to API
+        token: str - API key for api.repliers.io
+        city: str - city to search
+        street_name: str - street name to search
+        street_number: str - street number to search
+        street_abbr: str - street abbreviature for filtering
+        apt_unit: str - unit code for filtering
+
+    returns
+        dictionary (hash map) - info about finded and filtered buildings
+    '''
+    
+    # get from envirement API Key (don't want store it in code text)
+    load_dotenv()
+    token = os.getenv('replier_token')
+
+    # generation of redis DB key for an item
+    redis_key = f'{city}.{street_number}.{street_name}'
+
+    # try get request result from item
+    data = await redis.get(redis_key)
+
+    # if not request result in redis just send request
+    if data is None:
+        print(f'start request for: \n\t{city} - {street_number} - {street_name}')
+        response = await replier_request(session=session, 
+                                         token=token, 
+                                         city=city, 
+                                         street_name=street_name, 
+                                         street_number=street_number)
+
+        status_code = response[1]
+        print('status code is:', status_code)
+
+        # if all good, just serialize JSON response
+        if 199 < status_code <= 299:
+            data = response[0]
+            data_str = json.dumps(data)
+
+            # Use Redis pipeline for bulk data insertion (save runtime)
+            pipe = redis.pipeline()
+            pipe.set(redis_key, data_str)
+            await pipe.execute()
+            
+        else:
+            print(f'bad request for: {city} - {street_number} - {street_name}')
+            data = None
+            return {}
+        
+
+async def parse():
+    '''
+    read filter params -> create async tasks for make requests and filter buildings ->
+    gathering info from tasks -> create json file with output results
+    '''
+    start = time.time()
+
+    filtered_data = {'listings': []}
+
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+
+        # read data source with filter params
+        filter_settings = read_filter_settings('search_settings.json')
+
+        # for every line from table get filter fields
+        for filter_build_params in filter_settings:
+            city = filter_build_params['Municipality']
+            street_name = filter_build_params['Street name']
+            street_number = str(filter_build_params['Street #'])
+            street_abbr = filter_build_params['Street abbr']
+            apt_unit = filter_build_params['Apt/Unit']
+            # for every line create async task with specific filter fields
+            # task will make request and filtering of request response
+            task = asyncio.create_task(get_buildings_info(session, city, street_name, street_number, street_abbr, apt_unit))
+            tasks.append(task)
+
+        # gather results from every tasks
+        results = await asyncio.gather(*tasks)
+        for data in results:
+            if not isinstance(data, type(None)):
+                filtered_data['listings'] += data
+            else:
+                print(f"can't read data for {city} - {street_number} - {street_name}")    
+
+    # write result data to json file
+    with open('filtered.json', 'w', encoding='utf-8') as f:
+        json.dump(filtered_data, f, indent=4)
+
+    total = round(time.time() - start, 2)
+    print(f'run in {total} secs.')
+
+
+def main():
+    asyncio.run(parse())
+
+
+if __name__ == '__main__':
+    main()

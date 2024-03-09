@@ -8,3 +8,12 @@ renv:
 
 run:
 	venv/bin/python replier_parser.py
+
+freeze:
+	venv/bin/python -m pip freeze
+
+reqs:
+	venv/bin/python -m pip freeze -> requirements.txt
+
+docker:
+	docker-compose up -d
