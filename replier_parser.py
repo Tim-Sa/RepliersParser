@@ -5,260 +5,281 @@ import time
 import json
 import asyncio
 import platform
+import logging
 from functools import wraps
 from json import JSONDecodeError
 from asyncio.proactor_events import _ProactorBasePipeTransport
+from typing import List, Dict, Tuple, Any, Optional
 
 import aiohttp
 import redis.asyncio as aioredis
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, validator
+
+from search_settings import boilerplate_read_filter_settings
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Constants for configuration
+CACHE_REDIS_HOST = 'redis://localhost'
+TIME_DELAY = 15
+RETRIES = 5
+USE_CACHE = True
+
+# Redis client setup for caching results
+redis = aioredis.from_url(CACHE_REDIS_HOST, encoding="utf8", decode_responses=True)
+
+
+class PropertyModel(BaseModel):
+    street_number:  str = Field(..., alias='Street #')
+    street_name:    str = Field(..., alias='Street name')
+    municipality:   str = Field(..., alias='Municipality')
+    street_abbr:          Optional[str] = Field(None, alias='Street abbr')
+    street_direction:     Optional[str] = Field(None, alias='Street direction')
+    apt_unit:             Optional[str] = Field(None, alias='Apt/Unit')
+    penthouse:            Optional[bool] = Field(None, alias='Penthouse')
+    sub_penthouse:        Optional[bool] = Field(None, alias='Sub-penthouse')
+    penthouse_collection: Optional[bool] = Field(None, alias='Penthouse collection')
+
+
+class AddressModel(BaseModel):
+    street_number: str
+    street_name:   str
+    city:          str
+    street_abbr: Optional[str] = None
+    apt_unit:    Optional[str] = None
+
+    @validator('apt_unit', pre=True, always=True)
+    def validate_apt_unit(cls, value: Optional[str]) -> Optional[str]:
+        """Ensure the apartment unit string is clean and lowercase."""
+        if value:
+            return re.sub(r'[^a-zA-Z0-9]', '', value).lower()
+        return value
+
+
+class BuildingModel(BaseModel):
+    address: AddressModel
+    other_info: Dict[str, Any]
 
 
 def silence_event_loop_closed(func):
-    '''
-        Wrapper for disable raising of 'Event loop is closed' error.
-    '''
+    """Wrapper to silence 'Event loop is closed' errors."""
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         try:
             return func(self, *args, **kwargs)
         except RuntimeError as e:
             if str(e) != 'Event loop is closed':
-                raise
+                raise     
     return wrapper
 
 
- # disable raising of 'Event loop is closed' errors with all async functions
-_ProactorBasePipeTransport.__del__ = silence_event_loop_closed(_ProactorBasePipeTransport.__del__)
-if platform.system()=='Windows':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+def set_event_loop_policy():
+    """Set event loop policy for Windows."""
+    _ProactorBasePipeTransport.__del__ = silence_event_loop_closed(_ProactorBasePipeTransport.__del__)
+    if platform.system() == 'Windows':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-# Cache for storing requests results for preventing reply of similar requests
-CACHE_REDIS_HOST = 'redis://localhost'
-redis = aioredis.from_url(CACHE_REDIS_HOST, 
-                          encoding="utf8", 
-                          decode_responses=True)
+async def handle_rate_limiting(attempt: int, retries: int, delay: int):
+    """Handle rate limiting by waiting and retrying."""
+    if attempt < retries - 1:
+        logger.warning("Received 429 error. Retrying in %d seconds...", delay)
+        await asyncio.sleep(delay)
+        return True
+    return False
 
 
-async def replier_request(session: aiohttp.ClientSession, 
-                          token: str, 
-                          city: str, street_name: str, street_number: str) -> (dict, int):
-    
-    '''
-    get from repliers api info about buildings on specific streets
+async def replier_request(
+    session: aiohttp.ClientSession,
+    token:   str,
+    address: AddressModel,
+    retries: int = RETRIES,
+    delay:   int = TIME_DELAY
+) -> Tuple[Dict[str, Any], int]:
+    """
+        Send a request to repliers API for building info.
+    """    
+    headers = {
+        'REPLIERS-API-KEY': token,
+        "content-type": "application/json",
+        'accept': 'application/json'
+    }
 
-    params:
-        session: iohttp.ClientSession - aiohttp session for async requests to API
-        token: str - API key for api.repliers.io
-        city: str - city to search
-        street_name: str - street name to search
-        street_number: str - street number to search
-
-    returns
-        dictionary - info about finded buildings
-        int - response status code
-    '''
-
-    # headers for request, there we put API key and type of recieving data
-    headers = {'REPLIERS-API-KEY': token, 
-               "content-type": "application/json", 
-               'accept': 'application/json'}
-    
-    # url for request with specified params (city, street, etc.)
-    params = f'city={city}&streetName={street_name}&streetNumber={street_number}'
+    params = f'city={address.city}&streetName={address.street_name}&streetNumber={address.street_number}'
     url = f'https://api.repliers.io/listings/?listings=true&{params}'
 
-    # request to repliers API with specified params
-    async with session.get(url, headers=headers) as response:
-        try:
-            json_result = await response.json()
-        except JSONDecodeError:
-            # TODO: signal about problem
-            json_result = {}
+    for attempt in range(retries):
+        async with session.get(url, headers=headers) as response:
+            status = response.status
 
-        status = response.status
+            if status == 429:  # Too many requests
+                if await handle_rate_limiting(attempt, retries, delay):
+                    continue
+                return {}, status
+
+            try:
+                json_result = await response.json()
+                return json_result, status
+            except JSONDecodeError:
+                return {}, status
+
+    return {}, status
+
+
+def are_anagrams(street1: str, street2: str) -> bool:
+    """Compare two street names to check if they are anagrams."""
+    # Remove spaces and convert to lower case for comparison
+    normalized_street1 = ''.join(sorted(street1.replace(" ", "").lower()))
+    normalized_street2 = ''.join(sorted(street2.replace(" ", "").lower()))
+    return normalized_street1 == normalized_street2
+
+
+def filter_buildings(
+    data:          Dict[str, Any], 
+    filter_params: PropertyModel
+) -> List[BuildingModel]:
+    """Filter buildings based on search criteria."""
+    filtered_buildings = []
+
+    for building_data in data.get('listings', []):
+        address_data = building_data.get("address", {})
+        street_number = address_data.get("streetNumber")
+        street_name = address_data.get("streetName")
+
+        if not street_number or not street_name:
+            logger.warning("Missing street_number or street_name in %s", address_data)
+            continue  # Skip if essential fields are missing
+
+        address = AddressModel(
+            city=address_data.get("city", "Unknown City"),
+            street_number=street_number,
+            street_name=street_name,
+            street_abbr=address_data.get("streetDirection"),
+            apt_unit=address_data.get("unitNumber")
+        )
+
+        if (
+                filter_params.municipality.lower()  == address.city.lower()  and
+                filter_params.street_number.lower() == street_number.lower() and
+                are_anagrams(filter_params.street_name, street_name) and
+                (
+                    filter_params.street_abbr is None or filter_params.street_abbr.lower() == address.street_abbr.lower()
+                ) and
+                (
+                    filter_params.apt_unit.lower() == address.apt_unit.lower() if filter_params.apt_unit else True
+                )
+            ):
+            # Create a BuildingModel instance
+            filtered_buildings.append(BuildingModel(address=address, other_info=building_data))
+
+    return filtered_buildings
+
+
+async def get_buildings_info(
+    session:       aiohttp.ClientSession,
+    filter_params: PropertyModel
+) -> List[BuildingModel]:
+    """Fetch building information and filter results."""
     
-    return json_result, status
-
-
-def filter_buildings(data: dict, 
-                     f_city: str, 
-                     f_street_number: str, 
-                     f_street_name: str, 
-                     f_street_abbr: str, 
-                     f_apt_unit: str) -> list[dict]:
-    
-    '''
-    filter of items by street abbreviature and unit code.
-
-    params:
-        data: dict - data about buildings from API response with this structure - 
-            {
-                'listings': 
-                        [item1(dict), item2(dict), ..., itemN(dict)]
-            }
-        f_street_number: str - street number for filtering
-        f_street_name: str - street name for filtering
-        f_street_abbr: str - street abbreviature for filtering
-        f_apt_unit: str - unit code for filtering
-
-    returns
-        list of dictionaries (hash map) - info about finded and filtered buildings
-    '''
-
-    # unit code for filtering must be in same format with unit code from API response
-    #  Ph1004, PH 1004, ph-1004, ph#1004, #ph1004 -> ph1004
-    if len(f_apt_unit) > 0:
-        f_apt_unit = re.findall(r'[a-zA-Z0-9]+', f_apt_unit)[0].lower()
-
-    filtered = []
-
-    # parse info about every item from API response
-    for build in data['listings']:
-        addr = build["address"]
-        city = addr["city"]
-        street_number = addr['streetNumber']
-        street_name = addr['streetName']
-        street_abbr = addr["streetSuffix"]
-        apt_unit = addr["unitNumber"]
-
-        # unit code from API must be in same format with unit code for filtering
-        #  Ph1004, PH 1004, ph-1004, ph#1004, #ph1004 -> ph1004
-        if len(apt_unit) > 0:
-            apt_unit = re.findall(r'[a-zA-Z0-9]+', apt_unit)[0].lower()
-
-        # compare data from API with filter fields
-        if (f_city == city and
-            f_street_number == street_number and 
-            f_street_name == street_name and 
-            f_street_abbr == street_abbr and 
-            f_apt_unit == apt_unit):
-
-            filtered.append(build)
-
-    return filtered
-
-
-def read_filter_settings(path: str) -> list[dict]:
-    '''
-    read json file with filter params
-    '''
-    
-    with open(path, "r", encoding='utf-8') as f:
-        settings = json.load(f)
- 
-    return settings
-
-
-async def get_buildings_info(session: aiohttp.ClientSession, 
-                             city: str, 
-                             street_name: str, 
-                             street_number: str, 
-                             street_abbr: str, 
-                             apt_unit: str) -> dict:
-    
-    '''
-    get info about buildings from specified street and city, 
-    filter buildings with specified street abbreviature and unit code
-
-    params:
-        session: iohttp.ClientSession - aiohttp session for async requests to API
-        token: str - API key for api.repliers.io
-        city: str - city to search
-        street_name: str - street name to search
-        street_number: str - street number to search
-        street_abbr: str - street abbreviature for filtering
-        apt_unit: str - unit code for filtering
-
-    returns
-        dictionary (hash map) - info about finded and filtered buildings
-    '''
-    
-    # get from envirement API Key (don't want store it in code text)
     load_dotenv()
     token = os.getenv('replier_token')
 
-    # generation of redis DB key for an item
-    redis_key = f'{city}.{street_number}.{street_name}'
+    redis_key = f'{filter_params.municipality}.{filter_params.street_number}.{filter_params.street_name}'
+    cached_data = await redis.get(redis_key) if USE_CACHE else None
 
-    # try get request result from item
-    data = await redis.get(redis_key)
+    if cached_data is None:
+        logger.info('Starting request for: %s - %s - %s',
+                    filter_params.municipality,
+                    filter_params.street_number,
+                    filter_params.street_name)
+        address_model = AddressModel(
+            city=filter_params.municipality,
+            street_number=filter_params.street_number,
+            street_name=filter_params.street_name,
+            street_abbr=filter_params.street_abbr,
+            apt_unit=filter_params.apt_unit
+        )
 
-    # if not request result in redis just send request
-    if data is None:
-        print(f'start request for: \n\t{city} - {street_number} - {street_name}')
-        response = await replier_request(session=session, 
-                                         token=token, 
-                                         city=city, 
-                                         street_name=street_name, 
-                                         street_number=street_number)
+        response = await replier_request(session=session, token=token, address=address_model)
 
         status_code = response[1]
-        print('status code is:', status_code)
+        logger.info('Status code: %d', status_code)
 
-        # if all good, just serialize JSON response
         if 199 < status_code <= 299:
             data = response[0]
-            data_str = json.dumps(data)
-
-            # Use Redis pipeline for bulk data insertion (save runtime)
-            pipe = redis.pipeline()
-            pipe.set(redis_key, data_str)
-            await pipe.execute()
-            
+            if USE_CACHE:
+                await redis.set(redis_key, json.dumps(data))  # Cache the result
+            return filter_buildings(data, filter_params)
         else:
-            print(f'bad request for: {city} - {street_number} - {street_name}')
-            data = None
-            return {}
-        
+            logger.error('Bad request: %s - %s - %s', 
+                         filter_params.municipality,
+                         filter_params.street_number, 
+                         filter_params.street_name)
+            return []
 
-async def parse():
-    '''
-    read filter params -> create async tasks for make requests and filter buildings ->
-    gathering info from tasks -> create json file with output results
-    '''
-    start = time.time()
+    return json.loads(cached_data) if cached_data else []  # Parse cached data if exists
 
-    filtered_data = {'listings': []}
+
+async def parse(filter_settings: List[PropertyModel]):
+    """Main logic for making requests and gathering results."""
+    set_event_loop_policy()
+
+    start_time = time.time()
+    filtered_data = {
+        'apiVersion': '1.0',
+        'page': 1,
+        'numPages': 1, 
+        'pageSize': len(filter_settings),
+        'count': 0,
+        'statistics': { 
+            'totalBuildings': 0,
+            'filteredBuildings': 0
+        },
+        'listings': []
+    }
 
     async with aiohttp.ClientSession() as session:
-        tasks = []
+        tasks = [
+            asyncio.create_task(
+                get_buildings_info(session, params)) 
+                for params in filter_settings
+        ]
 
-        # read data source with filter params
-        filter_settings = read_filter_settings('search_settings.json')
-
-        # for every line from table get filter fields
-        for filter_build_params in filter_settings:
-            city = filter_build_params['Municipality']
-            street_name = filter_build_params['Street name']
-            street_number = str(filter_build_params['Street #'])
-            street_abbr = filter_build_params['Street abbr']
-            apt_unit = filter_build_params['Apt/Unit']
-            # for every line create async task with specific filter fields
-            # task will make request and filtering of request response
-            task = asyncio.create_task(get_buildings_info(session, city, street_name, street_number, street_abbr, apt_unit))
-            tasks.append(task)
-
-        # gather results from every tasks
         results = await asyncio.gather(*tasks)
-        for data in results:
-            if not isinstance(data, type(None)):
-                filtered_data['listings'] += data
+        
+        from pprint import pprint
+        pprint(results, indent=8)
+        exit(0)
+
+        for buildings in results:
+            if buildings:
+                filtered_data['listings'].extend(buildings)
+                filtered_data['statistics']['filteredBuildings'] += len(buildings)
             else:
-                print(f"can't read data for {city} - {street_number} - {street_name}")    
+                logger.warning("Can't read data for %s", filter_settings)
 
-    # write result data to json file
-    with open('filtered.json', 'w', encoding='utf-8') as f:
-        json.dump(filtered_data, f, indent=4)
+    # Update count
+    filtered_data['count'] = len(filtered_data['listings'])
 
-    total = round(time.time() - start, 2)
-    print(f'run in {total} secs.')
+    # Save filtered data to a JSON file
+    with open('filtered.json', 'w', encoding='utf-8') as file:
+        json.dump(filtered_data, file, indent=4)
+
+    elapsed_time = round(time.time() - start_time, 2)
+    logger.info('Run completed in %d seconds.', elapsed_time)
+
+    return filtered_data
 
 
 def main():
-    asyncio.run(parse())
+    """Main entry point for the script."""
+    property_models = boilerplate_read_filter_settings()
+    return asyncio.run(parse(property_models))
 
 
 if __name__ == '__main__':
-    main()
+    from pprint import pprint
+    pprint(main(), indent=4)
