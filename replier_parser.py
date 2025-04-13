@@ -7,9 +7,9 @@ import asyncio
 import platform
 import logging
 from functools import wraps
+from collections import Counter
 from json import JSONDecodeError
-from asyncio.proactor_events import _ProactorBasePipeTransport
-from typing import List, Dict, Tuple, Any, Optional
+from typing import List, Dict, Any, Tuple, Optional
 
 import aiohttp
 import redis.asyncio as aioredis
@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, validator
 
 from search_settings import boilerplate_read_filter_settings
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -28,10 +29,11 @@ TIME_DELAY = 15
 RETRIES = 5
 USE_CACHE = True
 
+
 # Redis client setup for caching results
 redis = aioredis.from_url(CACHE_REDIS_HOST, encoding="utf8", decode_responses=True)
 
-# Updated Model Definitions
+
 class PropertyModel(BaseModel):
     street_number: str = Field(..., alias='Street #')
     street_name: str = Field(..., alias='Street name')
@@ -51,7 +53,6 @@ class AddressModel(BaseModel):
 
     @validator('apt_unit', pre=True, always=True)
     def validate_apt_unit(cls, value: Optional[str]) -> Optional[str]:
-        """Ensure the apartment unit string is clean and lowercase."""
         if value:
             return re.sub(r'[^a-zA-Z0-9]', '', value).lower()
         return value
@@ -64,7 +65,6 @@ class BuildingModel(BaseModel):
     is_available: bool
 
 
-# Event loop policy adjustments
 def silence_event_loop_closed(func):
     """Wrapper to silence 'Event loop is closed' errors."""
     @wraps(func)
@@ -73,37 +73,26 @@ def silence_event_loop_closed(func):
             return func(self, *args, **kwargs)
         except RuntimeError as e:
             if str(e) != 'Event loop is closed':
-                raise     
+                raise
     return wrapper
 
 
 def set_event_loop_policy():
     """Set event loop policy for Windows."""
-    _ProactorBasePipeTransport.__del__ = silence_event_loop_closed(_ProactorBasePipeTransport.__del__)
     if platform.system() == 'Windows':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-async def handle_rate_limiting(attempt: int, retries: int, delay: int):
-    """Handle rate limiting by waiting and retrying."""
-    if attempt < retries - 1:
-        logger.warning("Received 429 error. Retrying in %d seconds...", delay)
-        await asyncio.sleep(delay)
-        return True
-    return False
-
-
 async def replier_request(session: aiohttp.ClientSession, token: str, address: AddressModel, retries: int = RETRIES, delay: int = TIME_DELAY) -> Tuple[Dict[str, Any], int]:
+    
     headers = {
         'REPLIERS-API-KEY': token,
         "content-type": "application/json",
         'accept': 'application/json'
     }
-
+    
     params = f'city={address.city}&streetName={address.street_name}'
     url = f'https://api.repliers.io/listings/?listings=true&{params}'
-
-    logger.info("Making request to URL: %s", url)
 
     for attempt in range(retries):
         async with session.get(url, headers=headers) as response:
@@ -119,7 +108,7 @@ async def replier_request(session: aiohttp.ClientSession, token: str, address: A
 
 
 def filter_buildings(data: Dict[str, Any]) -> List[BuildingModel]:
-    """Filter and create BuildingModel instances from the API response."""
+    
     filtered_buildings = []
 
     for building_data in data.get('listings', []):
@@ -132,7 +121,7 @@ def filter_buildings(data: Dict[str, Any]) -> List[BuildingModel]:
 
         if not street_number or not street_name:
             logger.warning("Missing street_number or street_name in %s", address_data)
-            continue  # Skip if essential fields are missing
+            continue
 
         address = AddressModel(
             city=city,
@@ -143,7 +132,6 @@ def filter_buildings(data: Dict[str, Any]) -> List[BuildingModel]:
             neighborhood=address_data.get("neighborhood")
         )
 
-        # Assume availability based on status
         is_available = status in ["A", "Active"]
 
         filtered_buildings.append(BuildingModel(
@@ -157,7 +145,7 @@ def filter_buildings(data: Dict[str, Any]) -> List[BuildingModel]:
 
 
 async def get_buildings_info(session: aiohttp.ClientSession, filter_params: PropertyModel) -> List[BuildingModel]:
-    """Fetch building information and filter results."""
+    
     load_dotenv()
     token = os.getenv('replier_token')
 
@@ -191,13 +179,65 @@ async def get_buildings_info(session: aiohttp.ClientSession, filter_params: Prop
                          filter_params.street_name)
             return []
 
-    return json.loads(cached_data) if cached_data else []  # Parse cached data if exists
+    return json.loads(cached_data) if cached_data else []
+
+
+def normalize_key(key: str) -> str:
+    return re.sub(r'\s+', ' ', key.strip()).lower()
+
+
+def extract_street_name(key: str) -> str:
+    parts = key.strip().split()
+    return ' '.join(parts[1:])
+
+
+def are_keys_permutations(key1: str, key2: str) -> bool:
+    return Counter(key1) == Counter(key2)
+
+
+async def form_result_buildings(filter_settings: List[PropertyModel], grouped_data: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    
+    building_models = []
+    normalized_filter_settings = {
+        extract_street_name(normalize_key(f"{params.street_number} {params.street_name}")): params for params in filter_settings
+    }
+
+    for street_key, info_list in grouped_data.items():
+        normalized_key = normalize_key(street_key)
+        street_name = extract_street_name(normalized_key)
+        
+        matched_params = None
+        for normalized_filter_key, params in normalized_filter_settings.items():
+            if are_keys_permutations(street_name, normalized_filter_key):
+                matched_params = params
+                break
+        
+        if matched_params:
+            address = {
+                "street_number": matched_params.street_number,
+                "street_name": matched_params.street_name,
+                "city": matched_params.municipality,
+                "apt_unit": matched_params.apt_unit,
+                "neighborhood": None
+            }
+            
+            for info in info_list:
+                building_model = {
+                    "address": address,
+                    "status": info["status"],
+                    "list_price": info["price"],
+                    "is_available": info["status"] == "Available"
+                }
+                building_models.append(building_model)
+        else:
+            logger.warning("No matching PropertyModel found for street key: %s", street_key)
+
+    return building_models
 
 
 async def parse(filter_settings: List[PropertyModel]):
-    """Main logic for making requests and gathering results."""
+    
     set_event_loop_policy()
-
     start_time = time.time()
     grouped_data = {}
 
@@ -216,16 +256,19 @@ async def parse(filter_settings: List[PropertyModel]):
                     "status": "Available" if building.is_available else "Occupied"
                 })
 
-    # Save grouped data to a JSON file
+    result = await form_result_buildings(filter_settings, grouped_data)
+
     with open('grouped_buildings.json', 'w', encoding='utf-8') as file:
-        json.dump(grouped_data, file, indent=4)
+        json.dump(result, file, indent=4)
 
     elapsed_time = round(time.time() - start_time, 2)
     logger.info('Run completed in %d seconds.', elapsed_time)
 
+    return result
+
 
 def main():
-    """Main entry point for the script."""
+    
     property_models = boilerplate_read_filter_settings()
     asyncio.run(parse(property_models))
 
