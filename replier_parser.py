@@ -298,11 +298,13 @@ async def form_result_buildings(
                 "street_number": matched_params.street_number,
                 "street_name": matched_params.street_name,
                 "city": matched_params.municipality,
-                "apt_unit": matched_params.apt_unit,
+                "apt_unit": None,
                 "neighborhood": None
             }
             
             for info in info_list:
+                address["apt_unit"] = info["apt_unit"]
+
                 building_model = {
                     "address": address,
                     "status": info["status"],
@@ -342,7 +344,8 @@ async def parse(filter_settings: List[PropertyModel]):
                 grouped_data[street_key].append({
                     "number": building.address.street_number,
                     "price": building.list_price,
-                    "status": "Available" if building.is_available else "Occupied"
+                    "status": "Available" if building.is_available else "Occupied",
+                    "apt_unit": building.address.apt_unit,
                 })
 
     result = await form_result_buildings(filter_settings, grouped_data)
