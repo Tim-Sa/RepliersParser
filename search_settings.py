@@ -98,14 +98,3 @@ def boilerplate_read_filter_settings() -> List[PropertyModel]:
     
     return [PropertyModel(**prop) for prop in properties]
 
-
-
-if __name__ == '__main__':
-    from pprint import pprint
-
-    properties = boilerplate_read_filter_settings()
-
-    if len(properties) > 10:
-        pprint(properties[:10], indent=4)
-    else:
-        pprint(properties, indent=4)

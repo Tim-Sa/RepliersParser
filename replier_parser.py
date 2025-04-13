@@ -14,36 +14,36 @@ from typing import List, Dict, Any, Tuple, Optional
 import aiohttp
 import redis.asyncio as aioredis
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 from search_settings import boilerplate_read_filter_settings
-
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Constants for configuration
+# Configuration constants
 CACHE_REDIS_HOST = 'redis://localhost'
-TIME_DELAY = 15
-RETRIES = 5
-USE_CACHE = True
+TIME_DELAY = 15  # Delay before retrying a request
+RETRIES = 5      # Number of retry attempts
+USE_CACHE = True  # Use cache for storing data
 
-
-# Redis client setup for caching results
+# Set up Redis client for caching results
 redis = aioredis.from_url(CACHE_REDIS_HOST, encoding="utf8", decode_responses=True)
 
 
-class PropertyModel(BaseModel):
+# Model representing the input details of an interest in a property
+class InquiryModel(BaseModel):
     street_name: str = Field(..., alias='Street name')
     municipality: str = Field(..., alias='Municipality')
     street_number: str = Field(..., alias='Street #')
     apt_unit: Optional[str] = Field(None, alias='Apt/Unit')
-    street_abbr: Optional[str] = Field(None, alias='Street abbr')
+    street_abbr: Optional[str] = Field(None, alias='Street abbreviation')
     street_direction: Optional[str] = Field(None, alias='Street direction')
 
 
-class AddressModel(BaseModel):
+# Model representing a detailed address
+class AddressDetailsModel(BaseModel):
     street_number: str
     street_name: str
     city: str
@@ -51,7 +51,7 @@ class AddressModel(BaseModel):
     street_abbr: Optional[str] = None
     apt_unit: Optional[str] = None
 
-    @validator('apt_unit', pre=True, always=True)
+    @field_validator('apt_unit')
     def validate_apt_unit(cls, value: Optional[str]) -> Optional[str]:
         """Clean and lowercase the apartment unit string.
 
@@ -66,15 +66,16 @@ class AddressModel(BaseModel):
         return value
 
 
-class BuildingModel(BaseModel):
-    address: AddressModel
+# Model representing the details of a building's availability and pricing
+class BuildingDetailsModel(BaseModel):
+    address: AddressDetailsModel
     status: str
-    list_price: float
+    rental_price: float
     is_available: bool
 
 
 def silence_event_loop_closed(func):
-    """Decorator to silence 'Event loop is closed' errors."""
+    """Decorator to suppress 'Event loop is closed' errors."""
     
     @wraps(func)
     def wrapper(self, *args, **kwargs):
@@ -92,23 +93,25 @@ def set_event_loop_policy():
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-async def replier_request(
+async def fetch_building_info(
     session: aiohttp.ClientSession, 
     token: str, 
-    address: AddressModel, 
+    address: AddressDetailsModel, 
     retries: int = RETRIES, 
     delay: int = TIME_DELAY) -> Tuple[Dict[str, Any], int]:
-    """Make a request to the repliers API for building listings.
+    """Send a request to the repliers API to retrieve building information.
+
+    This function handles the API request to get current rental information for specific addresses.
 
     Args:
         session (aiohttp.ClientSession): The active aiohttp session.
         token (str): The API key for authentication.
-        address (AddressModel): The address to query.
+        address (AddressDetailsModel): The address to query.
         retries (int, optional): Number of retry attempts. Defaults to RETRIES.
         delay (int, optional): Delay between retries in seconds. Defaults to TIME_DELAY.
 
     Returns:
-        Tuple[Dict[str, Any], int]: The JSON response and the HTTP status code.
+        Tuple[Dict[str, Any], int]: JSON response and HTTP status code.
     """
     
     headers = {
@@ -133,21 +136,23 @@ async def replier_request(
                 return {}, status
 
 
-def filter_buildings(data: Dict[str, Any]) -> List[BuildingModel]:
-    """Filter the API response to create a list of BuildingModel instances.
+def parse_building_data(data: Dict[str, Any]) -> List[BuildingDetailsModel]:
+    """Filter the API response to construct a list of BuildingDetailsModel instances.
+
+    This function interprets the raw response from the API to create structured building details.
 
     Args:
         data (Dict[str, Any]): The raw data from the API response.
 
     Returns:
-        List[BuildingModel]: A list of filtered and formatted BuildingModel instances.
+        List[BuildingDetailsModel]: A list of filtered and formatted BuildingDetailsModel instances.
     """
     
-    filtered_buildings = []
+    parsed_buildings = []
 
     for building_data in data.get('listings', []):
         address_data = building_data.get("address", {})
-        list_price = float(building_data.get("listPrice", 0).replace(",", ""))
+        rental_price = float(building_data.get("listPrice", 0).replace(",", ""))
         status = building_data.get("status", "Unknown")
         street_number = address_data.get("streetNumber")
         street_name = address_data.get("streetName")
@@ -157,7 +162,7 @@ def filter_buildings(data: Dict[str, Any]) -> List[BuildingModel]:
             logger.warning("Missing street_number or street_name in %s", address_data)
             continue
 
-        address = AddressModel(
+        address = AddressDetailsModel(
             city=city,
             street_number=street_number,
             street_name=street_name,
@@ -168,67 +173,74 @@ def filter_buildings(data: Dict[str, Any]) -> List[BuildingModel]:
 
         is_available = status in ["A", "Active"]
 
-        filtered_buildings.append(BuildingModel(
+        parsed_buildings.append(BuildingDetailsModel(
             address=address,
             status=status,
-            list_price=list_price,
+            rental_price=rental_price,
             is_available=is_available
         ))
 
-    return filtered_buildings
+    return parsed_buildings
 
 
-async def get_buildings_info(
+async def retrieve_building_info(
     session: aiohttp.ClientSession, 
-    filter_params: PropertyModel) -> List[BuildingModel]:
-    """Fetch building information based on provided filter parameters.
+    inquiry_params: InquiryModel) -> List[BuildingDetailsModel]:
+    """Fetch building information based on provided inquiry parameters.
+
+    This function combines getting fresh data from the API or retrieving cached data for the specified address.
 
     Args:
         session (aiohttp.ClientSession): The active aiohttp session.
-        filter_params (PropertyModel): The filter settings for querying.
+        inquiry_params (InquiryModel): The inquiry details for querying.
 
     Returns:
-        List[BuildingModel]: A list of BuildingModel instances retrieved from the API.
+        List[BuildingDetailsModel]: A list of BuildingDetailsModel instances retrieved from the API.
     """
     
     load_dotenv()
     token = os.getenv('replier_token')
 
-    redis_key = f'{filter_params.municipality}.{filter_params.street_number}.{filter_params.street_name}'
+    redis_key = f'{inquiry_params.municipality}.{inquiry_params.street_number}.{inquiry_params.street_name}'
     cached_data = await redis.get(redis_key) if USE_CACHE else None
 
+    # If not cached, perform API request
     if cached_data is None:
         logger.info('Starting request for: %s - %s - %s',
-                    filter_params.municipality,
-                    filter_params.street_number,
-                    filter_params.street_name)
-        address_model = AddressModel(
-            city=filter_params.municipality,
-            street_number=filter_params.street_number,
-            street_name=filter_params.street_name,
-            street_abbr=filter_params.street_abbr,
-            apt_unit=filter_params.apt_unit
+                    inquiry_params.municipality,
+                    inquiry_params.street_number,
+                    inquiry_params.street_name)
+        address_model = AddressDetailsModel(
+            city=inquiry_params.municipality,
+            street_number=inquiry_params.street_number,
+            street_name=inquiry_params.street_name,
+            street_abbr=inquiry_params.street_abbr,
+            apt_unit=inquiry_params.apt_unit
         )
 
-        response = await replier_request(session=session, token=token, address=address_model)
+        response = await fetch_building_info(session=session, token=token, address=address_model)
 
+        # Process successful response
         if 199 < response[1] <= 299:
             data = response[0]
             if USE_CACHE:
                 await redis.set(redis_key, json.dumps(data))  # Cache the result
-            return filter_buildings(data)
+            return parse_building_data(data)
         else:
             logger.error('Bad request: %s - %s - %s',
-                         filter_params.municipality,
-                         filter_params.street_number,
-                         filter_params.street_name)
+                         inquiry_params.municipality,
+                         inquiry_params.street_number,
+                         inquiry_params.street_name)
             return []
 
+    # Return cached data if available
     return json.loads(cached_data) if cached_data else []
 
 
-def normalize_key(key: str) -> str:
+def normalize_address_key(key: str) -> str:
     """Normalize a string key by stripping whitespace and converting to lowercase.
+
+    This function ensures a consistent comparison format for address keys.
 
     Args:
         key (str): The key to normalize.
@@ -241,6 +253,8 @@ def normalize_key(key: str) -> str:
 
 def extract_street_name(key: str) -> str:
     """Extract the street name from a full address key, ignoring numeric prefixes.
+
+    This helps in matching and comparing street names accurately.
 
     Args:
         key (str): The full address key.
@@ -255,6 +269,8 @@ def extract_street_name(key: str) -> str:
 def are_keys_permutations(key1: str, key2: str) -> bool:
     """Check if two keys are permutations of each other.
 
+    This function is used to determine if two address representations are similar.
+
     Args:
         key1 (str): The first key.
         key2 (str): The second key.
@@ -265,13 +281,13 @@ def are_keys_permutations(key1: str, key2: str) -> bool:
     return Counter(key1) == Counter(key2)
 
 
-async def form_result_buildings(
-    filter_settings: List[PropertyModel], 
+async def construct_building_results(
+    filter_settings: List[InquiryModel], 
     grouped_data: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """Formulate a list of result buildings based on filter settings and grouped data.
+    """Prepares the final output format of building information.
 
     Args:
-        filter_settings (List[PropertyModel]): The filter settings for matching.
+        filter_settings (List[InquiryModel]): The filter settings for matching.
         grouped_data (Dict[str, List[Dict[str, Any]]]): The grouped building data.
 
     Returns:
@@ -280,19 +296,21 @@ async def form_result_buildings(
     
     building_models = []
     normalized_filter_settings = {
-        extract_street_name(normalize_key(f"{params.street_number} {params.street_name}")): params for params in filter_settings
+        extract_street_name(normalize_address_key(f"{params.street_number} {params.street_name}")): params for params in filter_settings
     }
 
     for street_key, info_list in grouped_data.items():
-        normalized_key = normalize_key(street_key)
+        normalized_key = normalize_address_key(street_key)
         street_name = extract_street_name(normalized_key)
         
         matched_params = None
+        # Determine if each street key matches filter settings
         for normalized_filter_key, params in normalized_filter_settings.items():
             if are_keys_permutations(street_name, normalized_filter_key):
                 matched_params = params
                 break
         
+        # If matching parameters were found, construct building model
         if matched_params:
             address = {
                 "street_number": matched_params.street_number,
@@ -308,24 +326,24 @@ async def form_result_buildings(
                 building_model = {
                     "address": address,
                     "status": info["status"],
-                    "list_price": info["price"],
+                    "rental_price": info["price"],
                     "is_available": info["status"] == "Available"
                 }
                 building_models.append(building_model)
         else:
-            logger.warning("No matching PropertyModel found for street key: %s", street_key)
+            logger.warning("No matching InquiryModel found for street key: %s", street_key)
 
     return building_models
 
 
-async def parse(filter_settings: List[PropertyModel]):
-    """Main function to parse filter settings, make API requests, and save results.
+async def parse_inquiries(filter_settings: List[InquiryModel]):
+    """Coordinates the overall handling of property inquiries and ensures results are saved.
 
     Args:
-        filter_settings (List[PropertyModel]): The filter settings for querying buildings.
+        filter_settings (List[InquiryModel]): The filter settings for querying buildings.
 
     Returns:
-        List[Dict[str, Any]]: A list of result buildings after processing.
+        List[Dict[str, Any]]: A list of resulting buildings after processing.
     """
     
     set_event_loop_policy()
@@ -333,9 +351,11 @@ async def parse(filter_settings: List[PropertyModel]):
     grouped_data = {}
 
     async with aiohttp.ClientSession() as session:
-        tasks = [asyncio.create_task(get_buildings_info(session, params)) for params in filter_settings]
+        # Create tasks to fetch building information for each inquiry
+        tasks = [asyncio.create_task(retrieve_building_info(session, params)) for params in filter_settings]
         results = await asyncio.gather(*tasks)
 
+        # Group building data by street
         for buildings in results:
             for building in buildings:
                 street_key = f"{building.address.street_number} {building.address.street_name}"
@@ -343,13 +363,14 @@ async def parse(filter_settings: List[PropertyModel]):
                     grouped_data[street_key] = []
                 grouped_data[street_key].append({
                     "number": building.address.street_number,
-                    "price": building.list_price,
+                    "price": building.rental_price,
                     "status": "Available" if building.is_available else "Occupied",
                     "apt_unit": building.address.apt_unit,
                 })
 
-    result = await form_result_buildings(filter_settings, grouped_data)
+    result = await construct_building_results(filter_settings, grouped_data)
 
+    # Save results to a JSON file
     with open('grouped_buildings.json', 'w', encoding='utf-8') as file:
         json.dump(result, file, indent=4)
 
@@ -360,11 +381,5 @@ async def parse(filter_settings: List[PropertyModel]):
 
 
 def main():
-    """Main entry point for the script to run."""
-    
-    property_models = boilerplate_read_filter_settings()
-    asyncio.run(parse(property_models))
-
-
-if __name__ == '__main__':
-    main()
+    property_inquiries = boilerplate_read_filter_settings()
+    asyncio.run(parse_inquiries(property_inquiries))
