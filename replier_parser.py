@@ -16,7 +16,6 @@ import redis.asyncio as aioredis
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
-from search_settings import boilerplate_read_filter_settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -88,7 +87,7 @@ def silence_event_loop_closed(func):
 
 
 def set_event_loop_policy():
-    """Set event loop policy for Windows if necessary."""
+    """Set the event loop policy for Windows, if necessary."""
     if platform.system() == 'Windows':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -99,9 +98,7 @@ async def fetch_building_info(
     address: AddressDetailsModel, 
     retries: int = RETRIES, 
     delay: int = TIME_DELAY) -> Tuple[Dict[str, Any], int]:
-    """Send a request to the repliers API to retrieve building information.
-
-    This function handles the API request to get current rental information for specific addresses.
+    """Send the API request to get current rental information for specific addresses.
 
     Args:
         session (aiohttp.ClientSession): The active aiohttp session.
@@ -137,9 +134,7 @@ async def fetch_building_info(
 
 
 def parse_building_data(data: Dict[str, Any]) -> List[BuildingDetailsModel]:
-    """Filter the API response to construct a list of BuildingDetailsModel instances.
-
-    This function interprets the raw response from the API to create structured building details.
+    """Convert the raw API response into structured building details.
 
     Args:
         data (Dict[str, Any]): The raw data from the API response.
@@ -186,9 +181,7 @@ def parse_building_data(data: Dict[str, Any]) -> List[BuildingDetailsModel]:
 async def retrieve_building_info(
     session: aiohttp.ClientSession, 
     inquiry_params: InquiryModel) -> List[BuildingDetailsModel]:
-    """Fetch building information based on provided inquiry parameters.
-
-    This function combines getting fresh data from the API or retrieving cached data for the specified address.
+    """Get fresh data from the API or retrieve cached data for the specified address.
 
     Args:
         session (aiohttp.ClientSession): The active aiohttp session.
@@ -240,7 +233,7 @@ async def retrieve_building_info(
 def normalize_address_key(key: str) -> str:
     """Normalize a string key by stripping whitespace and converting to lowercase.
 
-    This function ensures a consistent comparison format for address keys.
+    This ensures a consistent comparison format for address keys.
 
     Args:
         key (str): The key to normalize.
@@ -267,9 +260,7 @@ def extract_street_name(key: str) -> str:
 
 
 def are_keys_permutations(key1: str, key2: str) -> bool:
-    """Check if two keys are permutations of each other.
-
-    This function is used to determine if two address representations are similar.
+    """Check if two address representations are permutations of each other.
 
     Args:
         key1 (str): The first key.
@@ -282,13 +273,13 @@ def are_keys_permutations(key1: str, key2: str) -> bool:
 
 
 async def construct_building_results(
-    filter_settings: List[InquiryModel], 
-    grouped_data: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """Prepares the final output format of building information.
+    inquiry_addresses: List[InquiryModel], 
+    building_info: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Prepare the final output format for building information.
 
     Args:
-        filter_settings (List[InquiryModel]): The filter settings for matching.
-        grouped_data (Dict[str, List[Dict[str, Any]]]): The grouped building data.
+        inquiry_addresses (List[InquiryModel]): The inquiry addresses for matching.
+        building_info (Dict[str, List[Dict[str, Any]]]): The grouped building data.
 
     Returns:
         List[Dict[str, Any]]: A list of dictionaries representing formatted building models.
@@ -296,10 +287,10 @@ async def construct_building_results(
     
     building_models = []
     normalized_filter_settings = {
-        extract_street_name(normalize_address_key(f"{params.street_number} {params.street_name}")): params for params in filter_settings
+        extract_street_name(normalize_address_key(f"{params.street_number} {params.street_name}")): params for params in inquiry_addresses
     }
 
-    for street_key, info_list in grouped_data.items():
+    for street_key, info_list in building_info.items():
         normalized_key = normalize_address_key(street_key)
         street_name = extract_street_name(normalized_key)
         
@@ -336,11 +327,11 @@ async def construct_building_results(
     return building_models
 
 
-async def parse_inquiries(filter_settings: List[InquiryModel]):
-    """Coordinates the overall handling of property inquiries and ensures results are saved.
+async def parse_inquiries(inquiry_addresses: List[InquiryModel]):
+    """Coordinate the overall handling of property inquiries and ensure results are collected.
 
     Args:
-        filter_settings (List[InquiryModel]): The filter settings for querying buildings.
+        inquiry_addresses (List[InquiryModel]): The inquiry addresses for querying buildings.
 
     Returns:
         List[Dict[str, Any]]: A list of resulting buildings after processing.
@@ -348,31 +339,27 @@ async def parse_inquiries(filter_settings: List[InquiryModel]):
     
     set_event_loop_policy()
     start_time = time.time()
-    grouped_data = {}
+    building_info = {}
 
     async with aiohttp.ClientSession() as session:
         # Create tasks to fetch building information for each inquiry
-        tasks = [asyncio.create_task(retrieve_building_info(session, params)) for params in filter_settings]
+        tasks = [asyncio.create_task(retrieve_building_info(session, params)) for params in inquiry_addresses]
         results = await asyncio.gather(*tasks)
 
         # Group building data by street
         for buildings in results:
             for building in buildings:
                 street_key = f"{building.address.street_number} {building.address.street_name}"
-                if street_key not in grouped_data:
-                    grouped_data[street_key] = []
-                grouped_data[street_key].append({
+                if street_key not in building_info:
+                    building_info[street_key] = []
+                building_info[street_key].append({
                     "number": building.address.street_number,
                     "price": building.rental_price,
                     "status": "Available" if building.is_available else "Occupied",
                     "apt_unit": building.address.apt_unit,
                 })
 
-    result = await construct_building_results(filter_settings, grouped_data)
-
-    # Save results to a JSON file
-    with open('grouped_buildings.json', 'w', encoding='utf-8') as file:
-        json.dump(result, file, indent=4)
+    result = await construct_building_results(inquiry_addresses, building_info)
 
     elapsed_time = round(time.time() - start_time, 2)
     logger.info('Run completed in %d seconds.', elapsed_time)
@@ -380,6 +367,44 @@ async def parse_inquiries(filter_settings: List[InquiryModel]):
     return result
 
 
+def boilerplate_read_inquiry_addresses() -> List[InquiryModel]:
+    """
+    Return a list of InquiryModel instances with predefined inquiries.
+    """
+    inquiries = [
+        {
+            'Street #': '6801',
+            'Street name': 'Queen',
+            'Street abbreviation': 'St',
+            'Street direction': None,
+            'Apt/Unit': None,
+            'Municipality': 'Toronto',
+        },
+        {
+            'Street #': '7119',
+            'Street name': 'Bloor',
+            'Street abbreviation': 'St',
+            'Street direction': None,
+            'Apt/Unit': None,
+            'Municipality': 'Toronto',
+        },
+        {
+            'Street #': '9864',
+            'Street name': 'Yonge',
+            'Street abbreviation': 'St',
+            'Street direction': None,
+            'Apt/Unit': None,
+            'Municipality': 'Toronto',
+        },
+    ]
+    
+    return [InquiryModel(**inquiry) for inquiry in inquiries]
+
+
 def main():
-    property_inquiries = boilerplate_read_filter_settings()
+    property_inquiries = boilerplate_read_inquiry_addresses()
     asyncio.run(parse_inquiries(property_inquiries))
+
+
+if __name__ == '__main__':
+    main()
