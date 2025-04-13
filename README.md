@@ -11,8 +11,8 @@ This script provides a Python-based solution for querying rental property inform
 
 ## Requirements
 
-- `Docker Compose` for orchestrating the development environment and run redis server
-- Python 3.7 or newer
+- **Docker Compose** for orchestrating the development environment and run redis server
+- **Python** 3.7 or newer
 - `aiohttp` for asynchronous HTTP requests
 - `redis` for caching data
 - `pydantic` for data validation
