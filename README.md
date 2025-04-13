@@ -46,7 +46,7 @@ This script provides a Python-based solution for querying rental property inform
    Replace YOUR_API_TOKEN with your actual API key.
 
 ## Usage
-    First start redis server via docker, then run script.
+    **First start redis server via docker, then run script.**:
    ```bash
    docker-compose up -d
    python replier_parser.py
