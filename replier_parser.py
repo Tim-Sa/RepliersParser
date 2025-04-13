@@ -402,8 +402,12 @@ def boilerplate_read_inquiry_addresses() -> List[InquiryModel]:
 
 
 def main():
+    from pprint import pprint
+    
     property_inquiries = boilerplate_read_inquiry_addresses()
-    asyncio.run(parse_inquiries(property_inquiries))
+    buildings = asyncio.run(parse_inquiries(property_inquiries))
+
+    pprint(buildings, indent=4)
 
 
 if __name__ == '__main__':
