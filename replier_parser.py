@@ -35,12 +35,12 @@ redis = aioredis.from_url(CACHE_REDIS_HOST, encoding="utf8", decode_responses=Tr
 
 
 class PropertyModel(BaseModel):
-    street_number: str = Field(..., alias='Street #')
     street_name: str = Field(..., alias='Street name')
     municipality: str = Field(..., alias='Municipality')
+    street_number: str = Field(..., alias='Street #')
+    apt_unit: Optional[str] = Field(None, alias='Apt/Unit')
     street_abbr: Optional[str] = Field(None, alias='Street abbr')
     street_direction: Optional[str] = Field(None, alias='Street direction')
-    apt_unit: Optional[str] = Field(None, alias='Apt/Unit')
 
 
 class AddressModel(BaseModel):
@@ -53,6 +53,14 @@ class AddressModel(BaseModel):
 
     @validator('apt_unit', pre=True, always=True)
     def validate_apt_unit(cls, value: Optional[str]) -> Optional[str]:
+        """Clean and lowercase the apartment unit string.
+
+        Args:
+            value (Optional[str]): The apartment unit value to validate.
+
+        Returns:
+            Optional[str]: Cleaned and lowercased apartment unit, or None if empty.
+        """
         if value:
             return re.sub(r'[^a-zA-Z0-9]', '', value).lower()
         return value
@@ -66,7 +74,8 @@ class BuildingModel(BaseModel):
 
 
 def silence_event_loop_closed(func):
-    """Wrapper to silence 'Event loop is closed' errors."""
+    """Decorator to silence 'Event loop is closed' errors."""
+    
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         try:
@@ -78,12 +87,29 @@ def silence_event_loop_closed(func):
 
 
 def set_event_loop_policy():
-    """Set event loop policy for Windows."""
+    """Set event loop policy for Windows if necessary."""
     if platform.system() == 'Windows':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-async def replier_request(session: aiohttp.ClientSession, token: str, address: AddressModel, retries: int = RETRIES, delay: int = TIME_DELAY) -> Tuple[Dict[str, Any], int]:
+async def replier_request(
+    session: aiohttp.ClientSession, 
+    token: str, 
+    address: AddressModel, 
+    retries: int = RETRIES, 
+    delay: int = TIME_DELAY) -> Tuple[Dict[str, Any], int]:
+    """Make a request to the repliers API for building listings.
+
+    Args:
+        session (aiohttp.ClientSession): The active aiohttp session.
+        token (str): The API key for authentication.
+        address (AddressModel): The address to query.
+        retries (int, optional): Number of retry attempts. Defaults to RETRIES.
+        delay (int, optional): Delay between retries in seconds. Defaults to TIME_DELAY.
+
+    Returns:
+        Tuple[Dict[str, Any], int]: The JSON response and the HTTP status code.
+    """
     
     headers = {
         'REPLIERS-API-KEY': token,
@@ -108,6 +134,14 @@ async def replier_request(session: aiohttp.ClientSession, token: str, address: A
 
 
 def filter_buildings(data: Dict[str, Any]) -> List[BuildingModel]:
+    """Filter the API response to create a list of BuildingModel instances.
+
+    Args:
+        data (Dict[str, Any]): The raw data from the API response.
+
+    Returns:
+        List[BuildingModel]: A list of filtered and formatted BuildingModel instances.
+    """
     
     filtered_buildings = []
 
@@ -144,7 +178,18 @@ def filter_buildings(data: Dict[str, Any]) -> List[BuildingModel]:
     return filtered_buildings
 
 
-async def get_buildings_info(session: aiohttp.ClientSession, filter_params: PropertyModel) -> List[BuildingModel]:
+async def get_buildings_info(
+    session: aiohttp.ClientSession, 
+    filter_params: PropertyModel) -> List[BuildingModel]:
+    """Fetch building information based on provided filter parameters.
+
+    Args:
+        session (aiohttp.ClientSession): The active aiohttp session.
+        filter_params (PropertyModel): The filter settings for querying.
+
+    Returns:
+        List[BuildingModel]: A list of BuildingModel instances retrieved from the API.
+    """
     
     load_dotenv()
     token = os.getenv('replier_token')
@@ -183,19 +228,55 @@ async def get_buildings_info(session: aiohttp.ClientSession, filter_params: Prop
 
 
 def normalize_key(key: str) -> str:
+    """Normalize a string key by stripping whitespace and converting to lowercase.
+
+    Args:
+        key (str): The key to normalize.
+
+    Returns:
+        str: The normalized key.
+    """
     return re.sub(r'\s+', ' ', key.strip()).lower()
 
 
 def extract_street_name(key: str) -> str:
+    """Extract the street name from a full address key, ignoring numeric prefixes.
+
+    Args:
+        key (str): The full address key.
+
+    Returns:
+        str: The extracted street name.
+    """
     parts = key.strip().split()
     return ' '.join(parts[1:])
 
 
 def are_keys_permutations(key1: str, key2: str) -> bool:
+    """Check if two keys are permutations of each other.
+
+    Args:
+        key1 (str): The first key.
+        key2 (str): The second key.
+
+    Returns:
+        bool: True if the keys are permutations of each other, False otherwise.
+    """
     return Counter(key1) == Counter(key2)
 
 
-async def form_result_buildings(filter_settings: List[PropertyModel], grouped_data: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+async def form_result_buildings(
+    filter_settings: List[PropertyModel], 
+    grouped_data: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Formulate a list of result buildings based on filter settings and grouped data.
+
+    Args:
+        filter_settings (List[PropertyModel]): The filter settings for matching.
+        grouped_data (Dict[str, List[Dict[str, Any]]]): The grouped building data.
+
+    Returns:
+        List[Dict[str, Any]]: A list of dictionaries representing formatted building models.
+    """
     
     building_models = []
     normalized_filter_settings = {
@@ -236,6 +317,14 @@ async def form_result_buildings(filter_settings: List[PropertyModel], grouped_da
 
 
 async def parse(filter_settings: List[PropertyModel]):
+    """Main function to parse filter settings, make API requests, and save results.
+
+    Args:
+        filter_settings (List[PropertyModel]): The filter settings for querying buildings.
+
+    Returns:
+        List[Dict[str, Any]]: A list of result buildings after processing.
+    """
     
     set_event_loop_policy()
     start_time = time.time()
@@ -268,6 +357,7 @@ async def parse(filter_settings: List[PropertyModel]):
 
 
 def main():
+    """Main entry point for the script to run."""
     
     property_models = boilerplate_read_filter_settings()
     asyncio.run(parse(property_models))
