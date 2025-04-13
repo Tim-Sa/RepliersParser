@@ -7,6 +7,7 @@ renv:
 	. ./venv/bin/activate
 
 run:
+	make redis
 	python replier_parser.py
 
 freeze:
@@ -16,4 +17,5 @@ reqs:
 	venv/bin/python -m pip freeze -> requirements.txt
 
 redis:
+	docker-compose down
 	docker-compose up -d

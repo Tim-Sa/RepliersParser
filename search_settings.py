@@ -84,7 +84,7 @@ def boilerplate_read_filter_settings() -> List[PropertyModel]:
             'Penthouse collection': None,
         },
         {
-            'Street #': '01',
+            'Street #': '9864',
             'Street name': 'Yonge',
             'Street abbr': 'St',
             'Street direction': None,
