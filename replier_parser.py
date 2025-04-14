@@ -29,11 +29,15 @@ logging.basicConfig(
 )
 
 # Configuration constants
-CACHE_REDIS_HOST = 'redis://localhost'
-TIME_DELAY  = 15  # Delay before retrying a request
-USE_CACHE   = True  # Use cache for storing data
-RETRIES     = 5       # Number of retry attempts
+load_dotenv()
 
+CACHE_REDIS_HOST = os.getenv('CACHE_REDIS_HOST', 'redis://localhost')
+USE_CACHE = os.getenv('USE_CACHE', 'True').lower() in ['true', '1', 't'] 
+
+TIME_DELAY = int(os.getenv('TIME_DELAY', 15))
+RETRIES = int(os.getenv('RETRIES', 5))
+
+TOKEN = os.getenv('REPLIERS_API_TOKEN')
 
 # Set up Redis client for caching results
 redis = aioredis.from_url(CACHE_REDIS_HOST, encoding="utf8", decode_responses=True)
@@ -184,8 +188,7 @@ async def retrieve_building_info(
         List[BuildingDetailsModel]: A list of BuildingDetailsModel instances retrieved from the API.
     """
     
-    load_dotenv()
-    token = os.getenv('replier_token')
+    token = TOKEN
 
     redis_key = f'{inquiry_params.municipality}.{inquiry_params.street_number}.{inquiry_params.street_name}'
     cached_data = await redis.get(redis_key) if USE_CACHE else None
