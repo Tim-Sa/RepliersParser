@@ -23,9 +23,24 @@ jobs:
 
       - name: Set up SSH
         run: |
+          if ! command -v ssh &> /dev/null; then
+              echo "SSH не установлен. Установка..."
+              sudo apt-get update -y
+              sudo apt-get install -y openssh-client
+          fi
+
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+
+          echo "Проверка доступа к серверу..."
+          if ssh -o BatchMode=yes -o ConnectTimeout=5 ${{ secrets.SERVER_IP }} exit; then
+              echo "Доступ к серверу установлен."
+          else
+              echo "Ошибка доступа к серверу. Проверьте IP-адрес и ключи." >&2
+              exit 1
+          fi
+
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
 
       - name: Copy files to server
@@ -35,12 +50,12 @@ jobs:
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
           TARGET_DIR: /home/${{ secrets.SERVER_USER }}/RepliersParser
         run: |
-          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./.env "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./api.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./replier_parser.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./Dockerfile "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./docker-compose.yml "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./requirements.txt "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          for file in .env api.py replier_parser.py Dockerfile docker-compose.yml requirements.txt; do
+              if ! scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no "$file" "$SERVER_USER@$SERVER_IP:$TARGET_DIR"; then
+                  echo "Ошибка при копировании файла: $file" >&2
+                  exit 1
+              fi
+          done
 
       - name: Restart Docker containers
         env:
@@ -48,8 +63,12 @@ jobs:
           SERVER_IP: ${{ secrets.SERVER_IP }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }} 
         run: |
-          ssh -p "$SERVER_PORT" -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
-          cd /home/${{ secrets.SERVER_USER }}/RepliersParser
+          if ! ssh -p "$SERVER_PORT" -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
+          cd "$TARGET_DIR"
           docker-compose down
           docker-compose up -d --build
           ENDSSH
+          then
+              echo "Ошибка при перезапуске контейнеров." >&2
+              exit 1
+          fi
