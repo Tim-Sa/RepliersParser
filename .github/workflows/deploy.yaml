@@ -37,29 +37,17 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
+          # Создаем файл known_hosts и добавляем хост
+          ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+
           echo "Проверка доступа к серверу..."
-          if ssh -v -p "$SERVER_PORT" "$SERVER_USER@$SERVER_IP" exit; then
+          if ssh -p "$SERVER_PORT" -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" exit; then
               echo "Доступ к серверу установлен."
           else
               echo "Ошибка доступа к серверу. Проверьте IP-адрес и ключи." >&2
               exit 1
           fi
 
-          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
-
-      - name: Copy files to server
-        env:
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_IP: ${{ secrets.SERVER_IP }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
-          TARGET_DIR: /home/${{ secrets.SERVER_USER }}/RepliersParser
-        run: |
-          for file in .env api.py replier_parser.py Dockerfile docker-compose.yml requirements.txt; do
-              if ! scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no "$file" "$SERVER_USER@$SERVER_IP:$TARGET_DIR"; then
-                  echo "Ошибка при копировании файла: $file" >&2
-                  exit 1
-              fi
-          done
 
       - name: Restart Docker containers
         env:
