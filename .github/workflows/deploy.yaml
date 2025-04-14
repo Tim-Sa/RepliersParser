@@ -37,17 +37,8 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
-          # Создаем файл known_hosts и добавляем хост
           ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
-
-          echo "Проверка доступа к серверу..."
-          if ssh -p "$SERVER_PORT" -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" exit; then
-              echo "Доступ к серверу установлен."
-          else
-              echo "Ошибка доступа к серверу. Проверьте IP-адрес и ключи." >&2
-              exit 1
           fi
-
 
       - name: Restart Docker containers
         env:
