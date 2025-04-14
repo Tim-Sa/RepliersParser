@@ -1,0 +1,53 @@
+name: Deploy FastAPI App
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Create .env file
+        run: |
+          echo "REPLIERS_API_TOKEN=${{ secrets.REPLIERS_API_TOKEN }}" >> .env
+          echo "CACHE_REDIS_HOST=redis://cache" >> .env
+          echo "TIME_DELAY=15" >> .env
+          echo "USE_CACHE=True" >> .env
+          echo "RETRIES=5" >> .env
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Copy files to server
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          TARGET_DIR: /home/${{ secrets.SERVER_USER }}/RepliersParser
+        run: |
+          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./.env "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./api.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./replier_parser.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./Dockerfile "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./docker-compose.yml "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./requirements.txt "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+
+      - name: Restart Docker containers
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }} 
+        run: |
+          sshpass -p "$SERVER_PASSWORD" ssh -p "$SERVER_PORT" -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
+          cd /home/${{ secrets.SERVER_USER }}/RepliersParser
+          docker-compose down
+          docker-compose up -d --build
+          ENDSSH
