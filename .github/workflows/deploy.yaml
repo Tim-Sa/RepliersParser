@@ -34,7 +34,7 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
 
           echo "Проверка доступа к серверу..."
-          if ssh -o BatchMode=yes -o ConnectTimeout=5 ${{ secrets.SERVER_IP }} exit; then
+          if ssh -p "$SERVER_PORT" -o BatchMode=yes -o ConnectTimeout=5 ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} exit; then
               echo "Доступ к серверу установлен."
           else
               echo "Ошибка доступа к серверу. Проверьте IP-адрес и ключи." >&2
