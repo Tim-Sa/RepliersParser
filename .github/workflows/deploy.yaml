@@ -21,32 +21,34 @@ jobs:
           echo "USE_CACHE=True" >> .env
           echo "RETRIES=5" >> .env
 
-      - name: Install sshpass
-        run: sudo apt-get install -y sshpass
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
 
       - name: Copy files to server
         env:
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_IP: ${{ secrets.SERVER_IP }}
-          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
           TARGET_DIR: /home/${{ secrets.SERVER_USER }}/RepliersParser
         run: |
-          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./.env "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./api.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./replier_parser.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./Dockerfile "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./docker-compose.yml "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-          sshpass -p "$SERVER_PASSWORD" scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./requirements.txt "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./.env "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./api.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./replier_parser.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./Dockerfile "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./docker-compose.yml "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+          scp -P "$SERVER_PORT" -o StrictHostKeyChecking=no ./requirements.txt "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
 
       - name: Restart Docker containers
         env:
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_IP: ${{ secrets.SERVER_IP }}
-          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }} 
         run: |
-          sshpass -p "$SERVER_PASSWORD" ssh -p "$SERVER_PORT" -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
+          ssh -p "$SERVER_PORT" -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
           cd /home/${{ secrets.SERVER_USER }}/RepliersParser
           docker-compose down
           docker-compose up -d --build
