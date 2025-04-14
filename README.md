@@ -11,8 +11,8 @@ This script provides a Python-based solution for querying rental property inform
 
 ## Requirements
 
-- `Docker Compose` for orchestrating the development environment and run redis server
-- Python 3.7 or newer
+- **Docker Compose** for orchestrating the development environment and run redis server
+- **Python** 3.7 or newer
 - `aiohttp` for asynchronous HTTP requests
 - `redis` for caching data
 - `pydantic` for data validation
@@ -46,7 +46,6 @@ This script provides a Python-based solution for querying rental property inform
    Replace YOUR_API_TOKEN with your actual API key.
 
 ## Usage
-    First start redis server via docker, then run script.
    ```bash
    docker-compose up -d
    python replier_parser.py
