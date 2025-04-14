@@ -21,18 +21,6 @@ jobs:
           echo "USE_CACHE=True" >> .env
           echo "RETRIES=5" >> .env
 
-      - name: Debug Environment Variables
-        env:
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_IP: ${{ secrets.SERVER_IP }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
-        run: |
-          echo "SERVER_PORT: $SERVER_PORT"
-          echo "SERVER_USER: $SERVER_USER"
-          echo "SERVER_IP: $SERVER_IP"
-        
-
-
       - name: Set up SSH
         env:
           SERVER_USER: ${{ secrets.SERVER_USER }}
@@ -50,7 +38,7 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
 
           echo "Проверка доступа к серверу..."
-          if ssh -p "$SERVER_PORT" -o BatchMode=yes -o ConnectTimeout=5 ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} exit; then
+          if ssh -p "$SERVER_PORT" -o BatchMode=yes ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} exit; then
               echo "Доступ к серверу установлен."
           else
               echo "Ошибка доступа к серверу. Проверьте IP-адрес и ключи." >&2
