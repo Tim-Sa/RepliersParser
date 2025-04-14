@@ -18,14 +18,22 @@ from pydantic import BaseModel, Field, field_validator
 
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("app.log"),
+        logging.StreamHandler()
+    ]
+)
 
 # Configuration constants
 CACHE_REDIS_HOST = 'redis://localhost'
-TIME_DELAY = 15  # Delay before retrying a request
-RETRIES = 5      # Number of retry attempts
-USE_CACHE = True  # Use cache for storing data
+TIME_DELAY  = 15  # Delay before retrying a request
+USE_CACHE   = True  # Use cache for storing data
+RETRIES     = 5       # Number of retry attempts
+
 
 # Set up Redis client for caching results
 redis = aioredis.from_url(CACHE_REDIS_HOST, encoding="utf8", decode_responses=True)
@@ -33,11 +41,11 @@ redis = aioredis.from_url(CACHE_REDIS_HOST, encoding="utf8", decode_responses=Tr
 
 # Model representing the input details of an interest in a property
 class InquiryModel(BaseModel):
-    street_name: str = Field(..., alias='Street name')
-    municipality: str = Field(..., alias='Municipality')
+    street_name:   str = Field(..., alias='Street name')
+    municipality:  str = Field(..., alias='Municipality')
     street_number: str = Field(..., alias='Street #')
-    apt_unit: Optional[str] = Field(None, alias='Apt/Unit')
-    street_abbr: Optional[str] = Field(None, alias='Street abbreviation')
+    apt_unit:         Optional[str] = Field(None, alias='Apt/Unit')
+    street_abbr:      Optional[str] = Field(None, alias='Street abbreviation')
     street_direction: Optional[str] = Field(None, alias='Street direction')
 
 
@@ -46,9 +54,9 @@ class AddressDetailsModel(BaseModel):
     street_number: str
     street_name: str
     city: str
+    apt_unit:     Optional[str] = None
+    street_abbr:  Optional[str] = None
     neighborhood: Optional[str] = None
-    street_abbr: Optional[str] = None
-    apt_unit: Optional[str] = None
 
     @field_validator('apt_unit')
     def validate_apt_unit(cls, value: Optional[str]) -> Optional[str]:
@@ -142,40 +150,25 @@ def parse_building_data(data: Dict[str, Any]) -> List[BuildingDetailsModel]:
     Returns:
         List[BuildingDetailsModel]: A list of filtered and formatted BuildingDetailsModel instances.
     """
-    
     parsed_buildings = []
-
+    
     for building_data in data.get('listings', []):
-        address_data = building_data.get("address", {})
-        rental_price = float(building_data.get("listPrice", 0).replace(",", ""))
-        status = building_data.get("status", "Unknown")
-        street_number = address_data.get("streetNumber")
-        street_name = address_data.get("streetName")
-        city = address_data.get("city", "Unknown City")
-
-        if not street_number or not street_name:
-            logger.warning("Missing street_number or street_name in %s", address_data)
-            continue
-
-        address = AddressDetailsModel(
-            city=city,
-            street_number=street_number,
-            street_name=street_name,
-            street_abbr=address_data.get("streetDirection"),
-            apt_unit=address_data.get("unitNumber"),
-            neighborhood=address_data.get("neighborhood")
-        )
-
-        is_available = status in ["A", "Active"]
-
         parsed_buildings.append(BuildingDetailsModel(
-            address=address,
-            status=status,
-            rental_price=rental_price,
-            is_available=is_available
+            address=AddressDetailsModel(
+                street_number=building_data['address']['streetNumber'],
+                street_name=building_data['address']['streetName'],
+                city=building_data['address'].get('city', 'Unknown City'),
+                apt_unit=building_data['address'].get('unitNumber'),
+                street_abbr=building_data['address'].get('streetDirection'),
+                neighborhood=building_data['address'].get('neighborhood')
+            ),
+            status=building_data.get('status', 'Unknown'),
+            rental_price=float(building_data.get('listPrice', 0).replace(',', '')),
+            is_available=building_data.get('status') in ["A", "Active"]
         ))
 
     return parsed_buildings
+
 
 
 async def retrieve_building_info(
@@ -274,12 +267,12 @@ def are_keys_permutations(key1: str, key2: str) -> bool:
 
 async def construct_building_results(
     inquiry_addresses: List[InquiryModel], 
-    building_info: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    building_info: Dict[str, List[BuildingDetailsModel]]) -> List[Dict[str, Any]]:
     """Prepare the final output format for building information.
 
     Args:
         inquiry_addresses (List[InquiryModel]): The inquiry addresses for matching.
-        building_info (Dict[str, List[Dict[str, Any]]]): The grouped building data.
+        building_info (Dict[str, List[BuildingDetailsModel]]): The grouped building data.
 
     Returns:
         List[Dict[str, Any]]: A list of dictionaries representing formatted building models.
@@ -295,30 +288,24 @@ async def construct_building_results(
         street_name = extract_street_name(normalized_key)
         
         matched_params = None
-        # Determine if each street key matches filter settings
         for normalized_filter_key, params in normalized_filter_settings.items():
             if are_keys_permutations(street_name, normalized_filter_key):
                 matched_params = params
                 break
         
-        # If matching parameters were found, construct building model
         if matched_params:
-            address = {
-                "street_number": matched_params.street_number,
-                "street_name": matched_params.street_name,
-                "city": matched_params.municipality,
-                "apt_unit": None,
-                "neighborhood": None
-            }
-            
-            for info in info_list:
-                address["apt_unit"] = info["apt_unit"]
-
+            for info in info_list:  # `info` now is a BuildingDetailsModel instance
                 building_model = {
-                    "address": address,
-                    "status": info["status"],
-                    "rental_price": info["price"],
-                    "is_available": info["status"] == "Available"
+                    "address": {
+                        "street_number": matched_params.street_number,
+                        "street_name": matched_params.street_name,
+                        "city": matched_params.municipality,
+                        "apt_unit": info.address.apt_unit,
+                        "neighborhood": info.address.neighborhood,
+                    },
+                    "status": info.status,
+                    "rental_price": info.rental_price,
+                    "is_available": info.is_available
                 }
                 building_models.append(building_model)
         else:
@@ -327,7 +314,37 @@ async def construct_building_results(
     return building_models
 
 
-async def parse_inquiries(inquiry_addresses: List[InquiryModel]):
+def convert_to_building_details(data: List[dict]) -> List[BuildingDetailsModel]:
+    """Convert a list of dictionary entries to a list of BuildingDetailsModel instances.
+
+    Args:
+        data (List[dict]): The list of dictionaries with building information.
+
+    Returns:
+        List[BuildingDetailsModel]: A list of BuildingDetailsModel instances.
+    """
+    building_details_list = []
+
+    for item in data:
+        address_data = item['address']
+        building_detail = BuildingDetailsModel(
+            address=AddressDetailsModel(
+                apt_unit=address_data.get('apt_unit'),
+                city=address_data['city'],
+                neighborhood=address_data['neighborhood'],
+                street_name=address_data['street_name'],
+                street_number=address_data['street_number']
+            ),
+            status=item['status'],
+            rental_price=item['rental_price'],
+            is_available=item['is_available']
+        )
+        building_details_list.append(building_detail)
+
+    return building_details_list
+
+
+async def parse_inquiries(inquiry_addresses: List[InquiryModel]) -> List[BuildingDetailsModel]:
     """Coordinate the overall handling of property inquiries and ensure results are collected.
 
     Args:
@@ -351,20 +368,15 @@ async def parse_inquiries(inquiry_addresses: List[InquiryModel]):
             for building in buildings:
                 street_key = f"{building.address.street_number} {building.address.street_name}"
                 if street_key not in building_info:
-                    building_info[street_key] = []
-                building_info[street_key].append({
-                    "number": building.address.street_number,
-                    "price": building.rental_price,
-                    "status": "Available" if building.is_available else "Occupied",
-                    "apt_unit": building.address.apt_unit,
-                })
+                    building_info[street_key] = []  # Create a list for buildings in the same location
+                building_info[street_key].append(building)  # Append the BuildingDetailsModel instance
 
     result = await construct_building_results(inquiry_addresses, building_info)
 
     elapsed_time = round(time.time() - start_time, 2)
     logger.info('Run completed in %d seconds.', elapsed_time)
 
-    return result
+    return convert_to_building_details(result)
 
 
 def boilerplate_read_inquiry_addresses() -> List[InquiryModel]:

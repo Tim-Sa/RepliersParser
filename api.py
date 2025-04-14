@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict, Any
 from fastapi import FastAPI, HTTPException
-from replier_parser import parse_inquiries, InquiryModel
+from replier_parser import parse_inquiries, InquiryModel, BuildingDetailsModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 
-@app.post("/parse-inquiries/", response_model=List[Dict[str, Any]])
+@app.post("/parse-inquiries/", response_model=List[BuildingDetailsModel])
 async def handle_inquiries(inquiry_addresses: List[InquiryModel]):
     try:
         results = await parse_inquiries(inquiry_addresses)

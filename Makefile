@@ -19,3 +19,7 @@ reqs:
 redis:
 	docker-compose down
 	docker-compose up -d
+
+make api:
+	make redis
+	python api.py
