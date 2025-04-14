@@ -21,18 +21,11 @@ jobs:
           echo "USE_CACHE=True" >> .env
           echo "RETRIES=5" >> .env
 
-      - name: Debug Environment Variables
+      - name: Set up SSH
         env:
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_IP: ${{ secrets.SERVER_IP }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
-          run: |
-            echo "SERVER_PORT: $SERVER_PORT"
-            echo "SERVER_USER: $SERVER_USER"
-            echo "SERVER_IP: $SERVER_IP"
-
-
-      - name: Set up SSH
         run: |
           if ! command -v ssh &> /dev/null; then
               echo "SSH не установлен. Установка..."
