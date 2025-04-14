@@ -1,11 +1,27 @@
-version: '2.23'
-
+version: '3.8' 
 
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8339:8000"
+    depends_on:
+      - cache
+    env_file:
+      - .env
+    environment:
+      CACHE_REDIS_HOST: redis://cache  
 
   cache:
     image: redis
     container_name: redis
     restart: always
     ports:
-      - 127.0.0.1:6379:6379
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

@@ -23,3 +23,30 @@ redis:
 make api:
 	make redis
 	python api.py
+
+# docker mode
+COMPOSE_FILE=docker-compose.yml 
+CONTAINER_NAME=repliers-parser-api
+IMAGE_NAME=repliers-parser-api
+
+start:
+	docker-compose -f $(COMPOSE_FILE) up -d --build
+
+stop:
+	docker-compose -f $(COMPOSE_FILE) stop
+
+rm:
+	docker-compose -f $(COMPOSE_FILE) down
+
+start-interactive:
+	docker-compose -f $(COMPOSE_FILE) run --rm $(CONTAINER_NAME)
+
+logs:
+	docker-compose -f $(COMPOSE_FILE) logs $(CONTAINER_NAME)
+
+restart: stop start
+
+rmi:
+	docker rmi -f $(IMAGE_NAME)
+
+clean: stop rm rmi

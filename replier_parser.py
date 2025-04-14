@@ -354,11 +354,15 @@ async def parse_inquiries(inquiry_addresses: List[InquiryModel]) -> List[Buildin
         inquiry_addresses (List[InquiryModel]): The inquiry addresses for querying buildings.
 
     Returns:
-        List[Dict[str, Any]]: A list of resulting buildings after processing.
+        List[BuildingDetailsModel]: A list of resulting buildings after processing.
     """
     
     set_event_loop_policy()
     start_time = time.time()
+    
+    # Clear Redis cache at the beginning
+    await redis.flushdb()
+
     building_info = {}
 
     async with aiohttp.ClientSession() as session:
@@ -375,6 +379,9 @@ async def parse_inquiries(inquiry_addresses: List[InquiryModel]) -> List[Buildin
                 building_info[street_key].append(building)  # Append the BuildingDetailsModel instance
 
     result = await construct_building_results(inquiry_addresses, building_info)
+
+    # Clear Redis cache at the end
+    await redis.flushdb()
 
     elapsed_time = round(time.time() - start_time, 2)
     logger.info('Run completed in %d seconds.', elapsed_time)
