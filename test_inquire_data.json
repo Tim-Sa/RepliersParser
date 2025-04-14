@@ -1,0 +1,26 @@
+[
+    {
+        "Street #": "6801",
+        "Street name": "Queen",
+        "Street abbreviation": "St",
+        "Street direction": null,
+        "Apt/Unit": null,
+        "Municipality": "Toronto"
+    },
+    {
+        "Street #": "7119",
+        "Street name": "Bloor",
+        "Street abbreviation": "St",
+        "Street direction": null,
+        "Apt/Unit": null,
+        "Municipality": "Toronto"
+    },
+    {
+        "Street #": "9864",
+        "Street name": "Yonge",
+        "Street abbreviation": "St",
+        "Street direction": null,
+        "Apt/Unit": null,
+        "Municipality": "Toronto"
+    }
+]
