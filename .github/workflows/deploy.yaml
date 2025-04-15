@@ -21,25 +21,6 @@ jobs:
           echo "USE_CACHE=True" >> .env
           echo "RETRIES=5" >> .env
 
-      - name: Set up SSH
-        env:
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-          SERVER_IP: ${{ secrets.SERVER_IP }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
-        run: |
-          set -x 
-          if ! command -v ssh &> /dev/null; then
-              echo "SSH не установлен. Установка..."
-              sudo apt-get update -y
-              sudo apt-get install -y openssh-client
-          fi
-
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-
-          ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts || { echo "Ошибка при получении ключа хоста"; exit 1; }
-
       - name: Copy files to server
         env:
             SERVER_USER: ${{ secrets.SERVER_USER }}
@@ -47,12 +28,14 @@ jobs:
             SERVER_PORT: ${{ secrets.SERVER_PORT }}
             TARGET_DIR: /home/${{ secrets.SERVER_USER }}/RepliersParser
         run: |
-            scp -P "$SERVER_PORT" ./.env "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-            scp -P "$SERVER_PORT" ./api.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-            scp -P "$SERVER_PORT" ./replier_parser.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-            scp -P "$SERVER_PORT" ./Dockerfile "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-            scp -P "$SERVER_PORT" ./docker-compose.yml "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
-            scp -P "$SERVER_PORT" ./requirements.txt "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+            echo "${{ secrets.SSH_PRIVATE_KEY }}" > pk
+            scp -i pk -P "$SERVER_PORT" ./.env "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+            scp -i pk -P "$SERVER_PORT" ./api.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+            scp -i pk -P "$SERVER_PORT" ./replier_parser.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+            scp -i pk -P "$SERVER_PORT" ./Dockerfile "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+            scp -i pk -P "$SERVER_PORT" ./docker-compose.yml "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+            scp -i pk -P "$SERVER_PORT" ./requirements.txt "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
+            rm -f pk
 
       - name: Restart Docker containers
         env:
