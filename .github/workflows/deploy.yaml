@@ -29,6 +29,7 @@ jobs:
             TARGET_DIR: /home/${{ secrets.SERVER_USER }}/RepliersParser
         run: |
             echo "${{ secrets.SSH_PRIVATE_KEY }}" > pk
+            chmod 600 pk
             scp -i pk -P "$SERVER_PORT" ./.env "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
             scp -i pk -P "$SERVER_PORT" ./api.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
             scp -i pk -P "$SERVER_PORT" ./replier_parser.py "$SERVER_USER@$SERVER_IP:$TARGET_DIR"
