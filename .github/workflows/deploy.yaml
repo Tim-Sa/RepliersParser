@@ -42,14 +42,14 @@ jobs:
         env:
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_IP: ${{ secrets.SERVER_IP }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }} 
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
         run: |
-          if ! ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
-          cd "$TARGET_DIR"
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > pk
+          chmod 600 pk
+          ssh -i pk -p "$SERVER_PORT" -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
+          cd /home/${{ secrets.SERVER_USER }}/RepliersParser
           docker-compose down
           docker-compose up -d --build
           ENDSSH
-          then
-              echo "Ошибка при перезапуске контейнеров." >&2
-              exit 1
-          fi
+          rm -f pk
+          
